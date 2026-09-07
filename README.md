@@ -4,10 +4,12 @@ A tiny macOS menu bar app that shows how much of your Claude plan's session
 and weekly limits you've used, without opening claude.ai or running `/usage`
 in Claude Code.
 
-The menu bar item reads something like `✳ S 12% · W 4%`: a starburst, then
-the session (5-hour window) and weekly percentages. Click it for the reset
-countdowns, a manual refresh, a Launch at Login toggle, and Quit. If the
-item is greyed out, the last poll failed and the menu says why.
+<img src="docs/screenshot.png" width="381" alt="Menu bar item showing S 4% · W 2%, with the menu open listing session and weekly usage and reset countdowns">
+
+The menu bar item shows a starburst, then the session (5-hour window) and
+weekly percentages. Click it for the reset countdowns, a manual refresh, a
+Launch at Login toggle, and Quit. If the item is greyed out, the last poll
+failed and the menu says why.
 
 ## Install
 
@@ -134,7 +136,13 @@ for the verdict, staples the ticket to the app, and re-zips it. Set only
   app icon is rendered by `swift scripts/make-icon.swift` into
   `Resources/AppIcon.png`.
 - The whole target builds cleanly with `-swift-version 6` strict
-  concurrency checking.
+  concurrency checking, and the CI workflow checks that on every push and
+  pull request.
+- Releasing: tag a commit `vX.Y.Z` and push the tag. The Release workflow
+  runs `scripts/make-app.sh` on a macOS runner and attaches the zip to a
+  GitHub release with generated notes. That build is ad-hoc signed; for a
+  notarized release, run the script locally with the variables above and
+  upload the result with `gh release upload vX.Y.Z dist/ClaudeUsageBar-X.Y.Z.zip --clobber`.
 
 ## License
 
