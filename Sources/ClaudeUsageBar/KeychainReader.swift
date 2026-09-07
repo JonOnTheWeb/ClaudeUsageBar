@@ -1,62 +1,66 @@
 import Foundation
 
-enum KeychainError: Error, LocalizedError {
-    case itemNotFound
-    case commandFailed(String)
+enum KeychainError: LocalizedError {
+    case notSignedIn
+    case unreadable(String)
 
     var errorDescription: String? {
         switch self {
-        case .itemNotFound:
-            return "No 'Claude Code-credentials' item in Keychain. Install Claude Code and log in with your Pro/Max/Team account once, then try again."
-        case .commandFailed(let detail):
-            return "Keychain lookup failed: \(detail)"
+        case .notSignedIn:
+            return "No Claude Code sign-in found. Open Claude Code and sign in with your Pro, Max or Team account once."
+        case .unreadable(let detail):
+            return "Couldn't read the Claude Code sign-in: \(detail)"
         }
     }
 }
 
-/// Reads the OAuth credential that Claude Code writes to the macOS Keychain
-/// after a successful subscription sign-in.
+/// Reads the OAuth access token that Claude Code stores in the login
+/// Keychain after a subscription sign-in.
 ///
 /// This shells out to `/usr/bin/security` rather than calling the Security
-/// framework directly, because the item belongs to Claude Code's own
-/// keychain access group, not this app's. The command-line tool can still
-/// read it, but macOS will show a one-off "ClaudeUsageBar wants to access
-/// key 'Claude Code-credentials'" prompt the first time — choose
-/// "Always Allow" so subsequent polls don't prompt again.
-struct KeychainReader {
+/// framework. Claude Code writes the item through the same tool, so reading
+/// it this way normally needs no permission prompt, and any grant the user
+/// does make attaches to that tool rather than to one particular build of
+/// this app. A direct `SecItemCopyMatching` from an unsigned or ad-hoc-signed
+/// binary would prompt again after every rebuild.
+enum KeychainReader {
     static let service = "Claude Code-credentials"
 
-    /// Returns the raw string stored in the keychain item. This is often a
-    /// JSON blob containing the access token, refresh token, and expiry
-    /// rather than a bare token — see `OAuthCredential.extract` for parsing.
-    static func readRawCredential() throws -> String {
+    /// The stored item is JSON. Only the access token is needed here:
+    /// `{"claudeAiOauth":{"accessToken":"…","refreshToken":"…","expiresAt":…}}`
+    private struct StoredCredentials: Decodable {
+        struct OAuth: Decodable { let accessToken: String }
+        let claudeAiOauth: OAuth
+    }
+
+    static func readAccessToken() throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
         process.arguments = ["find-generic-password", "-s", service, "-w"]
-
         let stdout = Pipe()
         let stderr = Pipe()
         process.standardOutput = stdout
         process.standardError = stderr
 
         try process.run()
+        let output = stdout.fileHandleForReading.readDataToEndOfFile()
+        let errorOutput = stderr.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
 
-        let outData = stdout.fileHandleForReading.readDataToEndOfFile()
-
-        if process.terminationStatus != 0 {
-            let errData = stderr.fileHandleForReading.readDataToEndOfFile()
-            let errText = String(data: errData, encoding: .utf8) ?? "unknown error"
-            if errText.contains("could not be found") {
-                throw KeychainError.itemNotFound
-            }
-            throw KeychainError.commandFailed(errText.trimmingCharacters(in: .whitespacesAndNewlines))
+        switch process.terminationStatus {
+        case 0:
+            break
+        case 44: // errSecItemNotFound
+            throw KeychainError.notSignedIn
+        default:
+            let detail = String(decoding: errorOutput, as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            throw KeychainError.unreadable(detail.isEmpty ? "security exited with status \(process.terminationStatus)" : detail)
         }
 
-        guard let text = String(data: outData, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
-            throw KeychainError.itemNotFound
+        guard let credentials = try? JSONDecoder().decode(StoredCredentials.self, from: output) else {
+            throw KeychainError.unreadable("unexpected credential format")
         }
-        return text
+        return credentials.claudeAiOauth.accessToken
     }
 }

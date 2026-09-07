@@ -1,95 +1,108 @@
 import AppKit
 
 @MainActor
-final class StatusBarController: NSObject {
+final class StatusBarController: NSObject, NSMenuDelegate {
+    /// How often the UI asks for fresh data. `UsageAPI.minimumPollInterval`
+    /// is the floor underneath, so lowering this alone won't hit the
+    /// endpoint any harder.
+    private let pollInterval: TimeInterval = 60
+
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let api = UsageAPI()
+    private let sessionItem = NSMenuItem()
+    private let weeklyItem = NSMenuItem()
+    private let errorItem = NSMenuItem()
+
+    private var snapshot: UsageSnapshot?
+    private var lastError: Error?
     private var timer: Timer?
 
-    // UI-level poll cadence. UsageAPI enforces its own floor underneath
-    // this, so tightening this further won't hammer the endpoint any harder.
-    private let pollInterval: TimeInterval = 60
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
+        return formatter
+    }()
 
     override init() {
         super.init()
         statusItem.button?.title = "Claude ⋯"
-        buildMenu(sessionText: "Loading…", weeklyText: "Loading…", errorText: nil)
-        startPolling()
+        statusItem.menu = makeMenu()
+        render()
+
+        timer = Timer.scheduledTimer(timeInterval: pollInterval, target: self,
+                                     selector: #selector(refreshNow), userInfo: nil, repeats: true)
+        refreshNow()
     }
 
-    private func startPolling() {
-        Task { await self.refresh() }
-        timer = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
-            Task { await self?.refresh() }
-        }
+    private func makeMenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.delegate = self
+        menu.addItem(sessionItem)
+        menu.addItem(weeklyItem)
+        menu.addItem(errorItem)
+        menu.addItem(.separator())
+
+        let refresh = NSMenuItem(title: "Refresh Now", action: #selector(refreshNow), keyEquivalent: "r")
+        refresh.target = self
+        menu.addItem(refresh)
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        return menu
+    }
+
+    // MARK: - Refreshing
+
+    @objc private func refreshNow() {
+        Task { await refresh() }
     }
 
     private func refresh() async {
         do {
-            let snapshot = try await api.fetchUsage()
-            render(snapshot)
+            snapshot = try await api.fetchUsage()
+            lastError = nil
         } catch {
-            renderError(error)
+            lastError = error
         }
+        render()
     }
 
-    private func render(_ snapshot: UsageSnapshot) {
-        let sessionPct = snapshot.sessionUsedPercent.map { "\(Int($0.rounded()))%" } ?? "?"
-        let weeklyPct = snapshot.weeklyUsedPercent.map { "\(Int($0.rounded()))%" } ?? "?"
-
-        statusItem.button?.title = "S \(sessionPct) · W \(weeklyPct)"
-
-        let sessionDetail = detailLine(label: "Session", percent: snapshot.sessionUsedPercent, resetsAt: snapshot.sessionResetsAt)
-        let weeklyDetail = detailLine(label: "Weekly", percent: snapshot.weeklyUsedPercent, resetsAt: snapshot.weeklyResetsAt)
-
-        buildMenu(sessionText: sessionDetail, weeklyText: weeklyDetail, errorText: nil)
+    /// Re-render on open so the "resets in…" countdowns are current, and
+    /// kick a refresh while we're at it. `UsageAPI`'s floor keeps that cheap.
+    func menuWillOpen(_ menu: NSMenu) {
+        render()
+        refreshNow()
     }
 
-    private func detailLine(label: String, percent: Double?, resetsAt: Date?) -> String {
-        var parts: [String] = []
-        parts.append(percent.map { "\(Int($0.rounded()))% used" } ?? "unknown — check CLAUDE_USAGE_DEBUG output")
-        if let resetsAt {
-            let formatter = RelativeDateTimeFormatter()
-            formatter.unitsStyle = .short
-            parts.append("resets \(formatter.localizedString(for: resetsAt, relativeTo: Date()))")
-        }
-        return "\(label): \(parts.joined(separator: ", "))"
-    }
+    // MARK: - Rendering
 
-    private func renderError(_ error: Error) {
-        statusItem.button?.title = "Claude ⚠️"
-        buildMenu(sessionText: "", weeklyText: "", errorText: error.localizedDescription)
-    }
-
-    private func buildMenu(sessionText: String, weeklyText: String, errorText: String?) {
-        let menu = NSMenu()
-
-        if let errorText {
-            menu.addItem(withTitle: errorText, action: nil, keyEquivalent: "")
-            menu.addItem(NSMenuItem.separator())
-        } else {
-            menu.addItem(withTitle: sessionText, action: nil, keyEquivalent: "")
-            menu.addItem(withTitle: weeklyText, action: nil, keyEquivalent: "")
-            menu.addItem(NSMenuItem.separator())
+    /// The last good numbers stay in the menu bar through a failed poll
+    /// (sleep/wake, offline, a 5xx), with a warning glyph appended and the
+    /// error itself shown as a line in the menu.
+    private func render() {
+        if let snapshot {
+            let warning = lastError == nil ? "" : " ⚠️"
+            statusItem.button?.title =
+                "S \(percentText(snapshot.session?.percent)) · W \(percentText(snapshot.weekly?.percent))\(warning)"
+        } else if lastError != nil {
+            statusItem.button?.title = "Claude ⚠️"
         }
 
-        let refreshItem = NSMenuItem(title: "Refresh Now", action: #selector(refreshNow), keyEquivalent: "r")
-        refreshItem.target = self
-        menu.addItem(refreshItem)
-
-        menu.addItem(NSMenuItem.separator())
-        let quitItem = NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q")
-        quitItem.target = self
-        menu.addItem(quitItem)
-
-        statusItem.menu = menu
+        sessionItem.title = detailLine("Session", snapshot?.session)
+        weeklyItem.title = detailLine("Weekly", snapshot?.weekly)
+        errorItem.title = lastError.map { "⚠️ \($0.localizedDescription)" } ?? ""
+        errorItem.isHidden = lastError == nil
     }
 
-    @objc private func refreshNow() {
-        Task { await self.refresh() }
+    private func detailLine(_ label: String, _ limit: UsageSnapshot.Limit?) -> String {
+        guard let limit else { return "\(label): –" }
+        var line = "\(label): \(percentText(limit.percent)) used"
+        if let resetsAt = limit.resetsAt {
+            line += ", resets \(Self.relativeFormatter.localizedString(for: resetsAt, relativeTo: Date()))"
+        }
+        return line
     }
 
-    @objc private func quit() {
-        NSApplication.shared.terminate(nil)
+    private func percentText(_ percent: Double?) -> String {
+        percent.map { "\(Int($0.rounded()))%" } ?? "?"
     }
 }
