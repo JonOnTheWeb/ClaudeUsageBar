@@ -1,8 +1,8 @@
-# ClaudeUsageBar
+# Claude Usage Bar
 
-A tiny macOS menu bar app that shows how much of your Claude plan's session
-and weekly limits you've used, without opening claude.ai or running `/usage`
-in Claude Code.
+A tiny open-source macOS menu bar app that shows how much of your Claude 
+plan's session and weekly limits you've used, without opening claude.ai 
+or running `/usage` in Claude Code and auto-refreshes.
 
 <img src="docs/screenshot.png" width="381" alt="Menu bar item showing S 4% · W 2%, with the menu open listing session and weekly usage and reset countdowns">
 
