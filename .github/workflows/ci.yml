@@ -1,0 +1,16 @@
+# Build check for pushes and pull requests, in strict Swift 6 mode so the
+# target stays free of concurrency warnings.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build (strict concurrency)
+        run: swift build -Xswiftc -swift-version -Xswiftc 6 -Xswiftc -warnings-as-errors

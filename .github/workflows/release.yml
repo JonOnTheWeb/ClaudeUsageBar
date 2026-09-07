@@ -1,0 +1,35 @@
+# Builds ClaudeUsageBar.app and attaches the zip to a GitHub release
+# whenever a tag like v1.2.0 is pushed. The build is ad-hoc signed; see the
+# README for producing a notarized build with your own Developer ID.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # make-app.sh derives the build number from the commit count
+
+      - name: Build app
+        run: scripts/make-app.sh "${GITHUB_REF_NAME#v}"
+
+      - name: Attach to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A release created from the GitHub UI pushes the tag too, so
+          # upload into it if it already exists rather than failing.
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/ClaudeUsageBar-*.zip --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/ClaudeUsageBar-*.zip \
+              --title "$GITHUB_REF_NAME" --generate-notes
+          fi
