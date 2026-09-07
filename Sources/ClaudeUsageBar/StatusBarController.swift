@@ -1,4 +1,5 @@
 import AppKit
+import ServiceManagement
 
 @MainActor
 final class StatusBarController: NSObject, NSMenuDelegate {
@@ -13,6 +14,8 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     private let sessionItem = NSMenuItem()
     private let weeklyItem = NSMenuItem()
     private let errorItem = NSMenuItem()
+    private let launchAtLoginItem = NSMenuItem(title: "Launch at Login",
+                                               action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
 
     private var snapshot: UsageSnapshot?
     private var lastError: Error?
@@ -24,9 +27,38 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         return formatter
     }()
 
+    /// A twelve-spoke starburst, drawn as a template image so it takes the
+    /// menu bar's text colour. Drawn in code rather than shipped as an asset
+    /// so `swift run` and the .app bundle behave the same.
+    private static let glyph: NSImage = {
+        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { rect in
+            let centre = NSPoint(x: rect.midX, y: rect.midY)
+            let lengths: [CGFloat] = [8, 6, 7.5, 6.5]
+            let path = NSBezierPath()
+            path.lineWidth = 1.9
+            path.lineCapStyle = .round
+            for spoke in 0..<12 {
+                let angle = CGFloat(spoke) / 12 * 2 * .pi + .pi / 2
+                let length = lengths[spoke % lengths.count]
+                path.move(to: centre)
+                path.line(to: NSPoint(x: centre.x + cos(angle) * length, y: centre.y + sin(angle) * length))
+            }
+            NSColor.black.setStroke()
+            path.stroke()
+            return true
+        }
+        image.isTemplate = true
+        return image
+    }()
+
     override init() {
         super.init()
-        statusItem.button?.title = "Claude ⋯"
+        if let button = statusItem.button {
+            button.image = Self.glyph
+            button.imagePosition = .imageLeading
+            button.imageHugsTitle = true
+            button.title = "…"
+        }
         statusItem.menu = makeMenu()
         render()
 
@@ -46,6 +78,12 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         let refresh = NSMenuItem(title: "Refresh Now", action: #selector(refreshNow), keyEquivalent: "r")
         refresh.target = self
         menu.addItem(refresh)
+
+        // SMAppService needs a real .app bundle; hide the toggle under `swift run`.
+        launchAtLoginItem.target = self
+        launchAtLoginItem.isHidden = Bundle.main.bundleURL.pathExtension != "app"
+        menu.addItem(launchAtLoginItem)
+
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         return menu
@@ -74,6 +112,25 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         refreshNow()
     }
 
+    // MARK: - Launch at login
+
+    @objc private func toggleLaunchAtLogin() {
+        let service = SMAppService.mainApp
+        do {
+            if service.status == .enabled {
+                try service.unregister()
+            } else {
+                try service.register()
+                if service.status == .requiresApproval {
+                    SMAppService.openSystemSettingsLoginItems()
+                }
+            }
+        } catch {
+            NSAlert(error: error).runModal()
+        }
+        render()
+    }
+
     // MARK: - Rendering
 
     /// The last good numbers stay in the menu bar through a failed poll
@@ -85,7 +142,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             statusItem.button?.title =
                 "S \(percentText(snapshot.session?.percent)) · W \(percentText(snapshot.weekly?.percent))"
         } else if lastError != nil {
-            statusItem.button?.title = "Claude ⚠️"
+            statusItem.button?.title = "⚠️"
         }
         statusItem.button?.appearsDisabled = lastError != nil
 
@@ -93,6 +150,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         weeklyItem.title = detailLine("Weekly", snapshot?.weekly)
         errorItem.title = lastError.map { "⚠️ \($0.localizedDescription)" } ?? ""
         errorItem.isHidden = lastError == nil
+        launchAtLoginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
     }
 
     private func detailLine(_ label: String, _ limit: UsageSnapshot.Limit?) -> String {
