@@ -26,7 +26,7 @@ actor UsageAPI {
     /// community tools that use it cache for 60-120 s. Inside the window
     /// the previous outcome is replayed, error included, so a failed poll
     /// doesn't turn into a burst of retries.
-    static let minimumPollInterval: TimeInterval = 45
+    static let minimumPollInterval: TimeInterval = 60
 
     private let session = URLSession(configuration: .ephemeral)
     private let debug = ProcessInfo.processInfo.environment["CLAUDE_USAGE_DEBUG"] == "1"

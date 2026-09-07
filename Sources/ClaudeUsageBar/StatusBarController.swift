@@ -2,10 +2,11 @@ import AppKit
 
 @MainActor
 final class StatusBarController: NSObject, NSMenuDelegate {
-    /// How often the UI asks for fresh data. `UsageAPI.minimumPollInterval`
-    /// is the floor underneath, so lowering this alone won't hit the
-    /// endpoint any harder.
-    private let pollInterval: TimeInterval = 60
+    /// How often the UI asks for fresh data. The numbers move slowly and
+    /// opening the menu refreshes on demand, so this can be relaxed.
+    /// `UsageAPI.minimumPollInterval` is the floor underneath, so lowering
+    /// this alone won't hit the endpoint any harder.
+    private let pollInterval: TimeInterval = 300
 
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let api = UsageAPI()
@@ -76,16 +77,17 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     // MARK: - Rendering
 
     /// The last good numbers stay in the menu bar through a failed poll
-    /// (sleep/wake, offline, a 5xx), with a warning glyph appended and the
-    /// error itself shown as a line in the menu.
+    /// (sleep/wake, offline, a 5xx). The item is greyed out rather than
+    /// retitled: a width change can push it off a crowded menu bar, which
+    /// notch Macs do silently, and the menu already shows the error.
     private func render() {
         if let snapshot {
-            let warning = lastError == nil ? "" : " ⚠️"
             statusItem.button?.title =
-                "S \(percentText(snapshot.session?.percent)) · W \(percentText(snapshot.weekly?.percent))\(warning)"
+                "S \(percentText(snapshot.session?.percent)) · W \(percentText(snapshot.weekly?.percent))"
         } else if lastError != nil {
             statusItem.button?.title = "Claude ⚠️"
         }
+        statusItem.button?.appearsDisabled = lastError != nil
 
         sessionItem.title = detailLine("Session", snapshot?.session)
         weeklyItem.title = detailLine("Weekly", snapshot?.weekly)
